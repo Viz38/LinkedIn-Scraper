@@ -43,6 +43,13 @@ Scrape multiple profiles from an Excel file. This tool extracts:
   ```bash
   python scrape_single_company.py
   ```
+  
+### 3. Bulk Scraping
+- **Profile:** Edit `working_SES.py` to change the URL, then run it:
+  ```bash
+  python "Search Snippet/working_SES.py"
+  ```
+
 
 ## ⚠️ Important Notes
 - **Safety:** Do not scrape too fast. The scripts have built-in delays, but aggressive scraping can get your account restricted.

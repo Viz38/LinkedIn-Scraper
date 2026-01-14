@@ -5,16 +5,12 @@ import os
 from pathlib import Path
 import random
 import urllib.parse
+from playwright.async_api import async_playwright
 
-# Add project root to path
 current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parent
-sys.path.append(str(project_root))
+sys.path.append(str(current_dir.parent))
 
-from linkedin_scraper.core.browser import BrowserManager
-from playwright.async_api import Page
-
-async def search_duckduckgo(page: Page, query: str):
+async def search_duckduckgo(page, query):
     """
     Search DuckDuckGo directly for the URL without quotes.
     """
@@ -22,17 +18,19 @@ async def search_duckduckgo(page: Page, query: str):
     url = f"https://duckduckgo.com/?q={encoded}"
     
     try:
-        await page.goto(url)
-        # Random wait for human-like behavior
-        await asyncio.sleep(random.uniform(2.5, 4.0))
+        await page.goto(url, timeout=30000)
+        await asyncio.sleep(random.uniform(2.0, 3.5))
         
         result_selector = "article[data-testid='result']"
-        
+        try:
+            await page.wait_for_selector(result_selector, timeout=10000)
+        except:
+            pass
+
         count = await page.locator(result_selector).count()
         if count == 0:
             return None, None, None
 
-        # Iterate to find relevant result
         for i in range(min(count, 5)):
             res = page.locator(result_selector).nth(i)
             title = await res.locator("h2").inner_text()
@@ -51,7 +49,6 @@ async def search_duckduckgo(page: Page, query: str):
             except:
                 pass
             
-            # Relevance check: Ensure LinkedIn is mentioned in title, URL, or snippet
             if "linkedin" in title.lower() or "linkedin" in display_url.lower() or "linkedin" in snippet.lower():
                 return title, display_url, snippet
         
@@ -62,60 +59,49 @@ async def search_duckduckgo(page: Page, query: str):
 
 async def main():
     input_file = current_dir / "test_founder.xlsx"
-    if not input_file.exists():
-        print(f"❌ File not found: {input_file}")
-        return
+    if not input_file.exists(): return
         
-    df = pd.read_excel(input_file)
+    df = pd.read_excel(input_file, engine='openpyxl')
     target_column = 'Search Result Detail'
     
-    if target_column not in df.columns:
-        df[target_column] = None
+    # 🧹 Clean column
+    df[target_column] = None
 
-    rows_to_process = []
-    for idx, row in df.iterrows():
-        # Process if empty or previously failed
-        if pd.isna(row[target_column]) or row[target_column] == "" or "No Relevant Result" in str(row[target_column]):
-            rows_to_process.append(idx)
+    limit = 10
+    rows_to_process = df.index[:limit]
 
-    if not rows_to_process:
-        print("✅ All entries already processed.")
-        return
+    print(f"🚀 Starting Headless Test for first {limit} profiles...")
 
-    print(f"🚀 Starting Optimized Search for {len(rows_to_process)} profiles...")
-
-    async with BrowserManager(headless=False) as browser:
-        page = browser.page
+    async with async_playwright() as p:
+        # HEADLESS=TRUE as requested
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
         
         for i, idx in enumerate(rows_to_process):
             url = df.at[idx, 'LinkedIn URL']
-            print(f"🔍 [{i+1}/{len(rows_to_process)}] Searching: {url}")
+            print(f"🔍 [{i+1}/{limit}] Searching: {url}")
             
-            try:
-                title, d_url, snippet = await search_duckduckgo(page, url)
-                
-                if title:
-                    # Clean the snippet of extra newlines
-                    snippet = snippet.replace('\n', ' ').strip()
-                    combined = f"{title}\n{d_url}\n{snippet}"
-                    df.at[idx, target_column] = combined
-                    print(f"   ✅ Success: {title[:40]}...")
-                else:
-                    print("   ⚠️ No relevant result found.")
-                    df.at[index, target_column] = "No Relevant Result Found"
-            except Exception as e:
-                print(f"   ❌ Failed: {e}")
-                df.at[idx, target_column] = f"Error: {e}"
+            title, d_url, snippet = await search_duckduckgo(page, url)
             
-            # Save progress
+            if title:
+                snippet = snippet.replace('\n', ' ').strip()
+                combined = f"{title}\n{d_url}\n{snippet}"
+                df.at[idx, target_column] = combined
+                print(f"   ✅ Success: {title[:40]}...")
+            else:
+                df.at[idx, target_column] = "No Relevant Result Found"
+                print("   ⚠️ No relevant result found.")
+            
+            # Save after each row to avoid loss
             df.to_excel(input_file, index=False)
-            
-            # Delay to mimic browsing
             await asyncio.sleep(random.uniform(2.0, 4.0))
 
-    print("\n" + "="*60)
+        await browser.close()
+
     print(f"✅ Complete. Results saved in {input_file}")
-    print("="*60)
 
 if __name__ == "__main__":
     asyncio.run(main())
